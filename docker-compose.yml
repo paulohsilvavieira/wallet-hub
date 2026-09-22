@@ -7,13 +7,13 @@ services:
         VITE_EXPLORER_URL: ${VITE_EXPLORER_URL:-http://localhost:3002}
         VITE_ETH_EXPLORER_URL: ${VITE_ETH_EXPLORER_URL:-http://localhost:8080}
     image: mybitcoin-wallet-hub:latest
-    networks: [default, bitcoin_default]
+    networks: [default, bitcoind_network]
     extra_hosts:
       - "host.docker.internal:host-gateway"
     environment:
       PORT: "3005"
-      RPC_HOST: bitcoin-node
-      RPC_PORT: "18443"
+      RPC_HOST: ${RPC_HOST:-bitcoin-node}
+      RPC_PORT: ${RPC_PORT:-18443}
       RPC_USER: ${RPC_USER:-admin}
       RPC_PASSWORD: ${RPC_PASSWORD:-admin}
       WALLET_NAME: ${WALLET_NAME:-bitcoin-wallet-regtest}
@@ -23,14 +23,18 @@ services:
       ADMIN_PASSWORD: ${ADMIN_PASSWORD}
     ports:
       - "3005:3005"
+    # Bind mount relativo em vez de volume nomeado: fica num path previsível
+    # (./data, ao lado deste arquivo), fácil de incluir em backup de disco e
+    # de detectar como storage persistente na UI de PaaS tipo Coolify.
     volumes:
-      - wallet-hub-data:/data
+      - ./data:/data
 
 networks:
   default:
     driver: bridge
-  bitcoin_default:
+  # O bitcoind (regtest) precisa estar acessível por essa rede Docker — o
+  # nome da rede externa é configurável via BITCOIN_NETWORK_NAME caso o seu
+  # node não esteja na rede `bitcoin_default`.
+  bitcoind_network:
     external: true
-
-volumes:
-  wallet-hub-data:
+    name: ${BITCOIN_NETWORK_NAME:-bitcoin_default}

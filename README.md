@@ -1,8 +1,12 @@
 # Wallet Hub
 
-Ferramenta interna pra facilitar testes com o **MyBitcoin**: um backend e um
-frontend únicos pra distribuir saldo de teste em **Bitcoin (regtest)** e
-**Ethereum (Anvil/devnet)**, com login e dois níveis de acesso:
+Ferramenta pra facilitar a transferência de saldo de teste (**Bitcoin
+regtest** e **Ethereum/Anvil**) durante o desenvolvimento e teste do
+**MyBitcoin** — sem precisar decorar comandos de RPC ou ficar chamando
+`bitcoin-cli`/`cast` na mão toda vez que precisa de fundos numa carteira de
+teste.
+
+Um só login, dois níveis de acesso:
 
 - **Admin**: console completo — gerencia conexões de node (BTC e ETH),
   contas de teste BTC, carteiras ETH compartilhadas (cola chave privada ou
@@ -12,34 +16,29 @@ frontend únicos pra distribuir saldo de teste em **Bitcoin (regtest)** e
 - **Usuário comum** (cadastro aberto): tela simplificada com dois cards —
   "Enviar BTC" e "Enviar ETH", só endereço de destino + valor. Limitado a
   **3 BTC/dia** e **3 ETH/dia por endereço de destino** (soma de todos os
-  usuários, reseta à meia-noite UTC). Nunca vê chave privada nem gerencia
-  contas.
+  usuários, reseta à meia-noite UTC).
 
-Não é uma ferramenta de produção nem lida com fundos reais — foi desenhada
-só pra alimentar saldo de teste nas carteiras do MyBitcoin (regtest/devnet).
+Não é uma ferramenta de produção nem lida com fundos reais — só regtest
+(BTC) e Anvil/devnet (ETH).
 
 ## Stack
 
-- **Frontend**: React 19 + Vite 6 + TypeScript + Tailwind v4, mesmo design
-  system usado no resto do MyBitcoin.
+- **Frontend**: React 19 + Vite 6 + TypeScript + Tailwind v4.
 - **Backend**: Express + `better-sqlite3` (um arquivo só, sem serviço de
-  banco separado), sessão por cookie httpOnly (sem biblioteca de sessão,
-  token aleatório + tabela `sessions`).
+  banco separado), sessão por cookie httpOnly.
 - **Bitcoin**: fala direto com o RPC do `bitcoind` (regtest) — geração de
   contas de teste local via BIP39/BIP32 (`bitcoinjs-lib`), sem criar wallet
   nova no node.
 - **Ethereum**: assinatura e envio **sempre no backend** (`ethers`), nunca
   no navegador — o frontend só manda endereço/valor. O RPC do Anvil nunca é
-  acessado direto numa porta 8545: sempre através do proxy HTTPS do
-  [`ethereum-local-explorer`](../ethereum/ethereum-local-explorer), com
-  header `X-RPC-Token`.
+  acessado direto numa porta 8545: sempre através de um proxy HTTPS
+  autenticado (header `X-RPC-Token`).
 
 ## Funcionalidades
 
 - **Conexões de node configuráveis**: o admin cadastra, edita, ativa e
   exclui múltiplas conexões salvas (BTC e ETH), trocando qual node está em
-  uso sem reiniciar o container. Útil pra apontar pra um node de dev vs. um
-  de staging, por exemplo.
+  uso sem reiniciar o container.
 - **Fallback de carteira ETH**: se a carteira mais antiga não tiver saldo
   suficiente pra um envio de usuário comum, o backend tenta automaticamente
   a próxima carteira cadastrada, sem o usuário perceber. Um alerta aparece
@@ -48,7 +47,7 @@ só pra alimentar saldo de teste nas carteiras do MyBitcoin (regtest/devnet).
 - **Faucet ETH** (admin-only): credita saldo instantaneamente num endereço
   via `anvil_setBalance`, sem gastar de nenhuma carteira.
 - **Recuperação de conta admin-assistida**: sem depender de e-mail, o admin
-  gera uma senha temporária pra qualquer usuário na aba "Usuários" — some
+  gera uma senha temporária pra qualquer usuário na aba "Usuários" — derruba
   todas as sessões ativas dele, mostrado só uma vez na tela.
 - **Admin fixo por variável de ambiente**: `ADMIN_EMAIL`/`ADMIN_PASSWORD`
   são sincronizados a cada boot do container — trocar a senha é só editar o
@@ -56,17 +55,19 @@ só pra alimentar saldo de teste nas carteiras do MyBitcoin (regtest/devnet).
 
 ## Pré-requisitos
 
-1. A stack `bitcoin` (repo irmão `../bitcoin`) precisa estar de pé, com a
-   rede Docker `bitcoin_default` disponível:
-   ```bash
-   cd ../bitcoin && docker compose up -d
-   ```
-2. O proxy do [`ethereum-local-explorer`](../ethereum/ethereum-local-explorer)
-   precisa estar acessível pela rede — por padrão isso é um domínio HTTPS
-   externo (`ANVIL_RPC_URL`), não um serviço Docker local; não há rede
-   Docker compartilhada com o Ethereum. Rodando local, `make up` nesse
-   projeto expõe o proxy em `http://localhost:9000` (RPC em `/rpc`, token
-   `local` por padrão).
+Você precisa de dois serviços já rodando e alcançáveis pela rede:
+
+1. **Um `bitcoind` em modo regtest**, com uma wallet carregada, alcançável
+   por RPC (`RPC_HOST`/`RPC_PORT`/`RPC_USER`/`RPC_PASSWORD`).
+2. **Um Anvil** (ou qualquer devnet Ethereum compatível), alcançável por
+   HTTP/RPC (`ANVIL_RPC_URL`, mais um header de autenticação opcional
+   `ANVIL_RPC_TOKEN` se o seu proxy/RPC exigir).
+
+Se você não tem esses dois de pé ainda, existem repositórios prontos que já
+sobem um `bitcoind` regtest com auto-mining e um Anvil, cada um acompanhado
+de um block explorer (btc-rpc-explorer e Blockscout, respectivamente) — pra
+não precisar montar isso do zero. Procure pelos projetos de infraestrutura
+regtest/devnet do MyBitcoin se for o seu caso.
 
 ## Configuração
 
@@ -78,10 +79,12 @@ cp .env.example .env
 
 | Variável | Uso |
 |---|---|
-| `RPC_USER` / `RPC_PASSWORD` | Credenciais RPC do `bitcoin-node` (mesmas da stack `bitcoin`) |
-| `WALLET_NAME` | Wallet auto-minerada do node, usada por `/api/btc/send` |
-| `ANVIL_RPC_URL` | URL do proxy `/rpc` do `ethereum-local-explorer` (ex: `https://seu-dominio.exemplo.com/rpc`, ou `http://host.docker.internal:9000/rpc` local) |
-| `ANVIL_RPC_TOKEN` | Header `X-RPC-Token` enviado em toda chamada ao Anvil (mesmo valor do `RPC_TOKEN` configurado no `ethereum-local-explorer`) |
+| `RPC_HOST` / `RPC_PORT` | Endereço do `bitcoind` (regtest) |
+| `RPC_USER` / `RPC_PASSWORD` | Credenciais RPC do `bitcoind` |
+| `WALLET_NAME` | Wallet carregada no node, usada por `/api/btc/send` |
+| `BITCOIN_NETWORK_NAME` | Nome da rede Docker externa onde o `bitcoind` está (default `bitcoin_default`) — só relevante rodando com Docker Compose |
+| `ANVIL_RPC_URL` | URL do RPC do Anvil (direto, ou através de um proxy autenticado) |
+| `ANVIL_RPC_TOKEN` | Header `X-RPC-Token` enviado em toda chamada ao Anvil, se o seu RPC exigir |
 | `VITE_EXPLORER_URL` / `VITE_ETH_EXPLORER_URL` | Links "abrir explorer" no frontend (build-time, embutidos no bundle) |
 | `ADMIN_EMAIL` / `ADMIN_PASSWORD` | Único jeito de existir um admin — sincronizado a cada boot (idempotente: se já bate, não faz nada) |
 
@@ -107,8 +110,8 @@ Bitcoin/Ethereum/Usuários). Qualquer conta criada por self-signup entra como
 usuário comum, e vê só os dois cards de envio simplificado.
 
 Dados (usuários, sessões, contas de teste, carteiras ETH, conexões de node,
-histórico) ficam no volume `wallet-hub-data`, mapeado em `/data` —
-sobrevivem a restart e recriação do container.
+histórico) ficam em `./data` (bind mount, ao lado do `docker-compose.yml`)
+— sobrevivem a restart e recriação do container.
 
 ### Atualizando depois de mexer no código
 
@@ -146,33 +149,34 @@ ADMIN_EMAIL=admin@example.com ADMIN_PASSWORD=troque-essa-senha \
 node index.js
 ```
 
-(Ajuste `RPC_HOST`/porta conforme como o `bitcoin-node` estiver exposto no
-seu ambiente — dentro do Docker Compose ele é `bitcoin-node:18443`; rodando
-solto localmente, depende de como você publicou a porta do container.)
-
 ## Rodando no Coolify
 
-O Coolify sobe o `docker-compose.yml` do repositório direto, então o
-processo é o de sempre — criar um recurso **Docker Compose** apontando pro
-repo, configurar as env vars na UI do Coolify (mesmas da tabela acima) e
-atribuir um domínio ao serviço `wallet-hub` (porta 3005).
+O Coolify sobe o `docker-compose.yml` do repositório direto: crie um
+recurso **Docker Compose** apontando pro repo, configure as env vars na UI
+do Coolify (mesmas da tabela acima) e atribua um domínio ao serviço
+`wallet-hub` (porta 3005).
 
 Duas pegadinhas específicas desse projeto:
 
-1. **A rede `bitcoin_default` precisa existir antes do deploy.** O compose
-   declara essa rede como `external: true` — se o stack `bitcoin` não
-   estiver rodando no mesmo host/Docker (Coolify ou não), o deploy falha na
-   hora de subir o container. Suba o stack `bitcoin` primeiro, confirme que
-   a rede existe (`docker network ls | grep bitcoin_default`), só depois
-   faça o deploy do `wallet-hub`.
+1. **A rede Docker do `bitcoind` precisa existir antes do deploy.** O
+   compose declara essa rede como `external: true` (nome configurável por
+   `BITCOIN_NETWORK_NAME`) — se ela não existir no host/Docker do Coolify
+   nesse momento, o deploy falha na hora de subir o container. Suba o
+   `bitcoind` primeiro, confirme que a rede existe
+   (`docker network ls | grep bitcoin_default`), só depois faça o deploy do
+   `wallet-hub`.
 2. **`ANVIL_RPC_URL` precisa ser uma URL alcançável a partir do host do
-   Coolify** — não tem rede Docker compartilhada com o Ethereum, é sempre
-   HTTPS externo (o domínio público do `ethereum-local-explorer`, rota
-   `/rpc`). Não use `localhost` nem endereço interno de outro stack.
+   Coolify.** Se o Anvil roda noutro host/stack sem rede Docker
+   compartilhada, use o domínio HTTPS público dele — nunca `localhost` nem
+   endereço interno de outro stack que o Coolify não enxerga.
 
-O volume `wallet-hub-data` (SQLite com usuários, contas, histórico) precisa
-ser um **volume persistente** no Coolify, não efêmero — senão todo deploy
-novo apaga os dados.
+**Persistência do SQLite**: o `docker-compose.yml` já usa um bind mount
+relativo (`./data:/data`) em vez de volume nomeado — o Coolify detecta isso
+automaticamente e deve listar em **Storages** pro recurso `wallet-hub`,
+como storage persistente. Confirme que aparece lá antes do primeiro deploy
+de verdade, e evite qualquer opção de "limpar volumes" durante redeploys.
+Pra testar que a persistência está funcionando: cadastre um usuário, force
+um redeploy, confira se ele continua lá.
 
 ## Estrutura
 
@@ -204,19 +208,3 @@ src/
     admin-console-page.tsx   # abas Bitcoin / Ethereum / Usuários
     user-send-page.tsx       # visão simplificada — abas Bitcoin / Ethereum
 ```
-
-## Fora de escopo
-
-- Não desliga nem apaga `bitcoin/wallet-console` nem
-  `ethereum/.../tx-sender` — ficam disponíveis até serem aposentados à parte.
-- Sem mainnet/testnet: só regtest (BTC) e anvil/devnet (ETH) — essa
-  ferramenta nunca deve mexer com fundos reais.
-- Sem recuperação de senha por e-mail — é admin-assistida (senha temporária
-  gerada na aba "Usuários").
-- Limite diário é por calendário UTC (reseta à meia-noite UTC), não é janela
-  rolante de 24h.
-- Sem poller em background pra confirmar transações ETH pendentes: o status
-  é reconsultado (via `eth_getTransactionReceipt`) só quando o envio
-  acontece e quando `GET /api/eth/history` é chamado de novo — suficiente
-  pro uso de teste, mas uma transação só fica "confirmado" na próxima vez
-  que alguém olhar o histórico depois do bloco sair.
