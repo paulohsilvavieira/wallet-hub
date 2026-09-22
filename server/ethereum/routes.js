@@ -6,19 +6,91 @@ const { ethers } = require("ethers");
 const anvilRpc = require("./anvilRpc.js");
 const wallets = require("./wallets.js");
 const history = require("./history.js");
+const connections = require("../connections.js");
 const { requireAdmin } = require("../middleware.js");
 
 const DAILY_LIMIT_ETH = 3;
 const FAUCET_MAX_ETH = 1_000_000;
 const ADDRESS_RE = /^0x[0-9a-fA-F]{40}$/;
+const CHAIN = "eth";
 
 const router = express.Router();
+
+async function sendFromWallet(wallet, address, valueWei) {
+	if (wallet.privateKey) {
+		const signer = new ethers.Wallet(wallet.privateKey, anvilRpc.getProvider());
+		const tx = await signer.sendTransaction({ to: address, value: valueWei });
+		return tx.hash;
+	}
+	// Sem chave salva (import do Anvil que não bateu com o mnemonic padrão)
+	// — o Anvil aceita enviar sem assinatura pras contas dele.
+	return anvilRpc.sendUnsignedTransaction({
+		from: wallet.address,
+		to: address,
+		value: "0x" + valueWei.toString(16)
+	});
+}
+
+function isInsufficientFundsError(e) {
+	const msg = String((e && e.message) || "").toLowerCase();
+	return e?.code === "INSUFFICIENT_FUNDS" || msg.includes("insufficient funds");
+}
+
+// --- Conexões de node (admin-only) ---
+
+function maskConnection(conn) {
+	const config = { ...conn.config };
+	if (config.rpcToken) config.rpcToken = "••••••••";
+	return { ...conn, config };
+}
+
+router.get("/connections", requireAdmin, (req, res) => {
+	res.json(connections.listConnections(CHAIN).map(maskConnection));
+});
+
+router.post("/connections", requireAdmin, (req, res) => {
+	const { network, label, config } = req.body;
+	try {
+		const created = connections.createConnection({ chain: CHAIN, network, label, config });
+		res.json(maskConnection(created));
+	} catch (e) {
+		res.status(400).json({ error: e.message });
+	}
+});
+
+router.put("/connections/:id", requireAdmin, (req, res) => {
+	const { network, label, config } = req.body;
+	try {
+		const updated = connections.updateConnection(CHAIN, req.params.id, { network, label, config });
+		res.json(maskConnection(updated));
+	} catch (e) {
+		res.status(400).json({ error: e.message });
+	}
+});
+
+router.post("/connections/:id/activate", requireAdmin, (req, res) => {
+	try {
+		res.json(maskConnection(connections.activateConnection(CHAIN, req.params.id)));
+	} catch (e) {
+		res.status(400).json({ error: e.message });
+	}
+});
+
+router.delete("/connections/:id", requireAdmin, (req, res) => {
+	try {
+		connections.deleteConnection(CHAIN, req.params.id);
+		res.json({ ok: true });
+	} catch (e) {
+		res.status(400).json({ error: e.message });
+	}
+});
 
 // --- Carteiras compartilhadas — só admin gerencia ---
 
 router.get("/wallets", requireAdmin, async (req, res) => {
 	try {
-		const list = wallets.listWallets();
+		const active = connections.getActiveConnection(CHAIN);
+		const list = wallets.listWallets(active.network);
 		const withBalances = await Promise.all(list.map(async (w) => {
 			try {
 				const balanceWei = await anvilRpc.getBalance(w.address);
@@ -43,7 +115,8 @@ router.post("/wallets", requireAdmin, (req, res) => {
 	}
 
 	try {
-		res.json(wallets.addWalletFromPrivateKey(label, privateKey));
+		const active = connections.getActiveConnection(CHAIN);
+		res.json(wallets.addWalletFromPrivateKey(label, privateKey, active.network));
 	} catch (e) {
 		res.status(400).json({ error: e.message });
 	}
@@ -51,7 +124,8 @@ router.post("/wallets", requireAdmin, (req, res) => {
 
 router.post("/wallets/import-anvil", requireAdmin, async (req, res) => {
 	try {
-		res.json(await wallets.importFromAnvil());
+		const active = connections.getActiveConnection(CHAIN);
+		res.json(await wallets.importFromAnvil(active.network));
 	} catch (e) {
 		res.status(400).json({ error: e.message });
 	}
@@ -120,49 +194,58 @@ router.post("/send", async (req, res) => {
 	}
 
 	try {
+		const active = connections.getActiveConnection(CHAIN);
+		const valueWei = ethers.parseEther(String(amt));
+
 		let wallet;
+		let txHash;
 
 		if (req.user.role === "admin") {
 			if (!walletId) {
 				res.status(400).json({ error: "Selecione a carteira de origem." });
 				return;
 			}
-			wallet = wallets.getWalletForSend(walletId);
+			wallet = wallets.getWalletForSend(walletId, active.network);
 			if (!wallet) {
 				res.status(400).json({ error: "Carteira não encontrada." });
 				return;
 			}
+
+			txHash = await sendFromWallet(wallet, address, valueWei);
 		} else {
-			wallet = wallets.firstWalletForSend();
-			if (!wallet) {
+			const candidates = wallets.listWalletsForSend(active.network);
+			if (candidates.length === 0) {
 				res.status(400).json({ error: "Nenhuma carteira Ethereum cadastrada ainda. Peça para o admin cadastrar uma." });
 				return;
 			}
 
-			const alreadySentToday = history.sumSentToAddressToday(address);
+			const alreadySentToday = history.sumSentToAddressToday(address, active.network);
 			if (alreadySentToday + amt > DAILY_LIMIT_ETH) {
 				res.status(400).json({
 					error: `Limite diário de ${DAILY_LIMIT_ETH} ETH por endereço de destino excedido (já enviado hoje pra esse endereço: ${alreadySentToday} ETH).`
 				});
 				return;
 			}
-		}
 
-		const valueWei = ethers.parseEther(String(amt));
-		let txHash;
+			// Tenta a primeira carteira cadastrada; se ela não tiver saldo
+			// suficiente, passa pra próxima, na ordem de cadastro. Só falha de
+			// vez se nenhuma tiver saldo.
+			for (const candidate of candidates) {
+				try {
+					txHash = await sendFromWallet(candidate, address, valueWei);
+					wallet = candidate;
+					break;
+				} catch (e) {
+					if (!isInsufficientFundsError(e)) throw e;
+				}
+			}
 
-		if (wallet.privateKey) {
-			const signer = new ethers.Wallet(wallet.privateKey, anvilRpc.getProvider());
-			const tx = await signer.sendTransaction({ to: address, value: valueWei });
-			txHash = tx.hash;
-		} else {
-			// Sem chave salva (import do Anvil que não bateu com o mnemonic
-			// padrão) — o Anvil aceita enviar sem assinatura pras contas dele.
-			txHash = await anvilRpc.sendUnsignedTransaction({
-				from: wallet.address,
-				to: address,
-				value: "0x" + valueWei.toString(16)
-			});
+			if (!wallet) {
+				res.status(400).json({
+					error: "Nenhuma carteira ETH com saldo suficiente pra esse envio. Peça pro admin recarregar via faucet."
+				});
+				return;
+			}
 		}
 
 		const now = new Date().toISOString();
@@ -174,6 +257,7 @@ router.post("/send", async (req, res) => {
 			valueWei: valueWei.toString(),
 			amountEth: amt,
 			status: "pending",
+			network: active.network,
 			userId: req.user.id,
 			createdAt: now,
 			updatedAt: now

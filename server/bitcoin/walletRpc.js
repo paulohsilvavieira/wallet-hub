@@ -1,21 +1,23 @@
 "use strict";
 
 const http = require("http");
+const connections = require("../connections.js");
 
-const RPC_HOST = process.env.RPC_HOST || "bitcoin-node";
-const RPC_PORT = process.env.RPC_PORT || 18443;
-const RPC_USER = process.env.RPC_USER || "admin";
-const RPC_PASSWORD = process.env.RPC_PASSWORD || "admin";
-
+// A URL/credenciais não vêm mais de env vars fixas — cada chamada consulta
+// a conexão BTC ativa em node_connections (better-sqlite3 é síncrono e
+// local, então não há custo relevante em consultar a cada RPC, e evita
+// ficar com config velha depois de trocar de rede pela UI).
 function rpcCall(method, params, walletName) {
+	const { config } = connections.getActiveConnection("btc");
+
 	return new Promise((resolve, reject) => {
-		const body = JSON.stringify({ jsonrpc: "1.0", id: "wallet-console", method, params: params || [] });
-		const auth = Buffer.from(`${RPC_USER}:${RPC_PASSWORD}`).toString("base64");
+		const body = JSON.stringify({ jsonrpc: "1.0", id: "wallet-hub", method, params: params || [] });
+		const auth = Buffer.from(`${config.rpcUser}:${config.rpcPassword}`).toString("base64");
 
 		const req = http.request(
 			{
-				hostname: RPC_HOST,
-				port: RPC_PORT,
+				hostname: config.rpcHost,
+				port: config.rpcPort,
 				path: walletName ? `/wallet/${encodeURIComponent(walletName)}` : "/",
 				method: "POST",
 				headers: {
@@ -104,6 +106,12 @@ function scanTxOutSet(descriptor) {
 	return rpcCall("scantxoutset", ["start", [descriptor]]);
 }
 
+// Nome da wallet do node a usar pra `/send` — vem da conexão ativa, não de
+// env var fixa (ver server/bitcoin/routes.js).
+function getActiveWalletName() {
+	return connections.getActiveConnection("btc").config.walletName;
+}
+
 module.exports = {
 	listWalletDir,
 	listLoadedWallets,
@@ -113,5 +121,6 @@ module.exports = {
 	validateAddress,
 	sendToAddress,
 	generateToAddress,
-	scanTxOutSet
+	scanTxOutSet,
+	getActiveWalletName
 };

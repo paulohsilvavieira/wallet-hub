@@ -27,11 +27,21 @@ db.exec(`
 
 db.exec("CREATE INDEX IF NOT EXISTS idx_ethereum_sends_to_at ON ethereum_sends(to_address, created_at)");
 
+// Migração: coluna `network` pra escopar o limite diário por rede — sem
+// isso, trocar a conexão ativa reseta o limite incorretamente (ou soma
+// valores de redes diferentes como se fossem a mesma). Registros antigos
+// (de antes de node_connections existir) ficam com 'anvil', a rede padrão
+// de sempre desse app.
+const ethereumSendsColumns = db.prepare("PRAGMA table_info(ethereum_sends)").all().map((c) => c.name);
+if (!ethereumSendsColumns.includes("network")) {
+	db.exec("ALTER TABLE ethereum_sends ADD COLUMN network TEXT NOT NULL DEFAULT 'anvil'");
+}
+
 const insertStmt = db.prepare(`
 	INSERT INTO ethereum_sends
-		(hash, wallet_id, from_address, to_address, value_wei, amount_eth, status, user_id, created_at, updated_at)
+		(hash, wallet_id, from_address, to_address, value_wei, amount_eth, status, network, user_id, created_at, updated_at)
 	VALUES
-		(@hash, @walletId, @fromAddress, @toAddress, @valueWei, @amountEth, @status, @userId, @createdAt, @updatedAt)
+		(@hash, @walletId, @fromAddress, @toAddress, @valueWei, @amountEth, @status, @network, @userId, @createdAt, @updatedAt)
 `);
 const updateStatusStmt = db.prepare(`
 	UPDATE ethereum_sends
@@ -40,27 +50,29 @@ const updateStatusStmt = db.prepare(`
 `);
 const getByHashStmt = db.prepare(`
 	SELECT hash, wallet_id AS walletId, from_address AS fromAddress, to_address AS toAddress,
-		value_wei AS valueWei, amount_eth AS amountEth, status, block_number AS blockNumber,
+		value_wei AS valueWei, amount_eth AS amountEth, status, network, block_number AS blockNumber,
 		gas_used AS gasUsed, error, user_id AS userId, created_at AS createdAt, updated_at AS updatedAt
 	FROM ethereum_sends WHERE hash = ?
 `);
 const listAllStmt = db.prepare(`
 	SELECT hash, wallet_id AS walletId, from_address AS fromAddress, to_address AS toAddress,
-		value_wei AS valueWei, amount_eth AS amountEth, status, block_number AS blockNumber,
+		value_wei AS valueWei, amount_eth AS amountEth, status, network, block_number AS blockNumber,
 		gas_used AS gasUsed, error, user_id AS userId, created_at AS createdAt, updated_at AS updatedAt
 	FROM ethereum_sends ORDER BY created_at DESC LIMIT 50
 `);
 const listByUserStmt = db.prepare(`
 	SELECT hash, wallet_id AS walletId, from_address AS fromAddress, to_address AS toAddress,
-		value_wei AS valueWei, amount_eth AS amountEth, status, block_number AS blockNumber,
+		value_wei AS valueWei, amount_eth AS amountEth, status, network, block_number AS blockNumber,
 		gas_used AS gasUsed, error, user_id AS userId, created_at AS createdAt, updated_at AS updatedAt
 	FROM ethereum_sends WHERE user_id = ? ORDER BY created_at DESC LIMIT 50
 `);
 const listPendingStmt = db.prepare("SELECT hash FROM ethereum_sends WHERE status = 'pending' ORDER BY created_at DESC LIMIT 20");
 // Endereços ETH têm checksum (mistura de maiúsculas/minúsculas) — soma por
-// LOWER() pra não deixar o limite diário escapar por causa disso.
+// LOWER() pra não deixar o limite diário escapar por causa disso. Filtrado
+// também por `network`: o limite diário é por rede, senão trocar de rede
+// reseta o limite incorretamente ou mistura valores de redes diferentes.
 const sumTodayByAddressStmt = db.prepare(
-	"SELECT COALESCE(SUM(amount_eth), 0) AS total FROM ethereum_sends WHERE LOWER(to_address) = LOWER(?) AND date(created_at) = date('now')"
+	"SELECT COALESCE(SUM(amount_eth), 0) AS total FROM ethereum_sends WHERE LOWER(to_address) = LOWER(?) AND network = ? AND date(created_at) = date('now')"
 );
 
 function addSend(entry) {
@@ -84,8 +96,8 @@ function listPendingHashes() {
 	return listPendingStmt.all().map((r) => r.hash);
 }
 
-function sumSentToAddressToday(address) {
-	return sumTodayByAddressStmt.get(address).total || 0;
+function sumSentToAddressToday(address, network) {
+	return sumTodayByAddressStmt.get(address, network).total || 0;
 }
 
 module.exports = {

@@ -39,8 +39,11 @@ const insertUserStmt = db.prepare(
 );
 const getUserByEmailStmt = db.prepare("SELECT * FROM users WHERE email = ?");
 const getUserByIdStmt = db.prepare("SELECT id, email, role, created_at AS createdAt FROM users WHERE id = ?");
-const countAdminsStmt = db.prepare("SELECT COUNT(*) AS count FROM users WHERE role = 'admin'");
+const getUserByIdFullStmt = db.prepare("SELECT * FROM users WHERE id = ?");
 const promoteToAdminStmt = db.prepare("UPDATE users SET role = 'admin', password_hash = ? WHERE id = ?");
+const listUsersStmt = db.prepare("SELECT id, email, role, created_at AS createdAt FROM users WHERE role != 'admin' ORDER BY created_at ASC");
+const updatePasswordStmt = db.prepare("UPDATE users SET password_hash = ? WHERE id = ?");
+const deleteSessionsForUserStmt = db.prepare("DELETE FROM sessions WHERE user_id = ?");
 
 const insertSessionStmt = db.prepare(
 	"INSERT INTO sessions (token, user_id, created_at, expires_at) VALUES (@token, @userId, @createdAt, @expiresAt)"
@@ -130,36 +133,58 @@ function getUserByToken(token) {
 	return getUserByIdStmt.get(session.user_id) || null;
 }
 
-// Chamado uma vez no boot do servidor. Idempotente: se já existe algum
-// admin, não faz nada (mesmo que ADMIN_EMAIL/ADMIN_PASSWORD estejam
-// setados). Se não existe admin e as env vars estão presentes, promove um
-// usuário já existente com esse e-mail, ou cria um novo.
+// Chamado a cada boot do servidor. ADMIN_EMAIL/ADMIN_PASSWORD são a fonte
+// da verdade do admin: se o usuário já existe, sincroniza senha+role toda
+// vez (assim trocar a senha é só editar o .env e reiniciar o container,
+// sem precisar mexer no banco); se não existe, cria. Não mexe em outros
+// admins que porventura existam (ex: promovidos manualmente no banco).
 function ensureAdminUser(email, password) {
 	if (!email || !password) {
 		return;
 	}
 
-	if (countAdminsStmt.get().count > 0) {
-		return;
-	}
-
 	const normalized = normalizeEmail(email);
 	const existing = getUserByEmailStmt.get(normalized);
+	const passwordHash = bcrypt.hashSync(password, 10);
 
 	if (existing) {
-		promoteToAdminStmt.run(bcrypt.hashSync(password, 10), existing.id);
-		console.log(`[auth] Usuário existente promovido a admin: ${normalized}`);
+		if (existing.role === "admin" && bcrypt.compareSync(password, existing.password_hash)) {
+			return; // já está em dia, evita re-hash/log a cada restart
+		}
+		promoteToAdminStmt.run(passwordHash, existing.id);
+		console.log(`[auth] Admin sincronizado a partir do .env: ${normalized}`);
 		return;
 	}
 
 	insertUserStmt.run({
 		id: crypto.randomUUID(),
 		email: normalized,
-		passwordHash: bcrypt.hashSync(password, 10),
+		passwordHash,
 		role: "admin",
 		createdAt: new Date().toISOString()
 	});
 	console.log(`[auth] Admin criado no boot: ${normalized}`);
+}
+
+// Recuperação de conta é admin-assistida (o wallet-hub não tem infra de
+// e-mail): admin gera uma senha temporária aleatória pro usuário, mostrada
+// só na hora, e o repasse é por fora (chat, presencial, etc). Derruba as
+// sessões existentes desse usuário, forçando login de novo com a nova senha.
+function listUsers() {
+	return listUsersStmt.all();
+}
+
+function resetUserPassword(userId) {
+	const user = getUserByIdFullStmt.get(userId);
+	if (!user) {
+		throw new Error("Usuário não encontrado.");
+	}
+
+	const tempPassword = crypto.randomBytes(9).toString("base64url"); // 12 chars, url-safe
+	updatePasswordStmt.run(bcrypt.hashSync(tempPassword, 10), userId);
+	deleteSessionsForUserStmt.run(userId);
+
+	return { user: toPublicUser(user), tempPassword };
 }
 
 module.exports = {
@@ -168,5 +193,7 @@ module.exports = {
 	logout,
 	getUserByToken,
 	ensureAdminUser,
+	listUsers,
+	resetUserPassword,
 	SESSION_DAYS
 };

@@ -8,6 +8,8 @@ services:
         VITE_ETH_EXPLORER_URL: ${VITE_ETH_EXPLORER_URL:-http://localhost:8080}
     image: mybitcoin-wallet-hub:latest
     networks: [default, bitcoin_default]
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     environment:
       PORT: "3005"
       RPC_HOST: bitcoin-node

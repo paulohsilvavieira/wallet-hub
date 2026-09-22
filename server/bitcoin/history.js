@@ -20,19 +20,29 @@ db.exec(`
 
 db.exec("CREATE INDEX IF NOT EXISTS idx_bitcoin_sends_address_at ON bitcoin_sends(address, at)");
 
+// Migração: coluna `network` pra escopar o limite diário por rede — sem
+// isso, trocar a conexão ativa reseta o limite incorretamente (ou soma
+// valores de redes diferentes como se fossem a mesma). Registros antigos
+// ficam com 'regtest', a rede padrão de sempre desse app.
+const bitcoinSendsColumns = db.prepare("PRAGMA table_info(bitcoin_sends)").all().map((c) => c.name);
+if (!bitcoinSendsColumns.includes("network")) {
+	db.exec("ALTER TABLE bitcoin_sends ADD COLUMN network TEXT NOT NULL DEFAULT 'regtest'");
+}
+
 const insertStmt = db.prepare(
-	"INSERT INTO bitcoin_sends (txid, from_wallet, address, amount, user_id, at) VALUES (@txid, @fromWallet, @address, @amount, @userId, @at)"
+	"INSERT INTO bitcoin_sends (txid, from_wallet, address, amount, network, user_id, at) VALUES (@txid, @fromWallet, @address, @amount, @network, @userId, @at)"
 );
 const listAllStmt = db.prepare(
-	"SELECT txid, from_wallet AS fromWallet, address, amount, user_id AS userId, at FROM bitcoin_sends ORDER BY at DESC LIMIT 50"
+	"SELECT txid, from_wallet AS fromWallet, address, amount, network, user_id AS userId, at FROM bitcoin_sends ORDER BY at DESC LIMIT 50"
 );
 const listByUserStmt = db.prepare(
-	"SELECT txid, from_wallet AS fromWallet, address, amount, user_id AS userId, at FROM bitcoin_sends WHERE user_id = ? ORDER BY at DESC LIMIT 50"
+	"SELECT txid, from_wallet AS fromWallet, address, amount, network, user_id AS userId, at FROM bitcoin_sends WHERE user_id = ? ORDER BY at DESC LIMIT 50"
 );
 // Soma por calendário UTC (não é janela rolante de 24h) — `at` é sempre
 // gravado como ISO 8601 UTC, então `date(at)` funciona direto no SQLite.
+// Filtrado também por `network` (limite diário é por rede).
 const sumTodayByAddressStmt = db.prepare(
-	"SELECT COALESCE(SUM(amount), 0) AS total FROM bitcoin_sends WHERE address = ? AND date(at) = date('now')"
+	"SELECT COALESCE(SUM(amount), 0) AS total FROM bitcoin_sends WHERE address = ? AND network = ? AND date(at) = date('now')"
 );
 
 function addSend(entry) {
@@ -44,8 +54,8 @@ function listSends({ userId } = {}) {
 	return userId ? listByUserStmt.all(userId) : listAllStmt.all();
 }
 
-function sumSentToAddressToday(address) {
-	return sumTodayByAddressStmt.get(address).total || 0;
+function sumSentToAddressToday(address, network) {
+	return sumTodayByAddressStmt.get(address, network).total || 0;
 }
 
 module.exports = {

@@ -13,6 +13,7 @@ const ecc = require("tiny-secp256k1");
 const { BIP32Factory } = require("bip32");
 const bitcoinjs = require("bitcoinjs-lib");
 const db = require("../db.js");
+const connections = require("../connections.js");
 
 const bip32 = BIP32Factory(ecc);
 
@@ -26,6 +27,15 @@ const REGTEST_NETWORK = {
 	scriptHash: 0xc4,
 	wif: 0xef
 };
+
+// Endereço/chave de uma rede não fazem sentido em outra (um bcrt1... nunca é
+// spendable em mainnet) — cada rede BTC ativa usa seus próprios parâmetros
+// bech32/versionbyte na hora de derivar o endereço.
+function networkParamsFor(network) {
+	if (network === "mainnet") return bitcoinjs.networks.bitcoin;
+	if (network === "testnet") return bitcoinjs.networks.testnet;
+	return REGTEST_NETWORK; // regtest (default)
+}
 
 db.exec(`
 	CREATE TABLE IF NOT EXISTS accounts (
@@ -45,30 +55,39 @@ const accountColumns = db.prepare("PRAGMA table_info(accounts)").all().map((c) =
 if (!accountColumns.includes("user_id")) {
 	db.exec("ALTER TABLE accounts ADD COLUMN user_id TEXT");
 }
+// Migração: adiciona `network` — contas antigas (de antes de node_connections
+// existir) ficam com 'regtest', a rede padrão de sempre desse app.
+if (!accountColumns.includes("network")) {
+	db.exec("ALTER TABLE accounts ADD COLUMN network TEXT NOT NULL DEFAULT 'regtest'");
+}
 
 const insertStmt = db.prepare(
-	"INSERT INTO accounts (id, label, address, mnemonic, private_key_wif, created_at, user_id) VALUES (@id, @label, @address, @mnemonic, @privateKeyWIF, @createdAt, @userId)"
+	"INSERT INTO accounts (id, label, address, mnemonic, private_key_wif, network, created_at, user_id) VALUES (@id, @label, @address, @mnemonic, @privateKeyWIF, @network, @createdAt, @userId)"
 );
-const listStmt = db.prepare("SELECT id, label, address, created_at AS createdAt FROM accounts WHERE user_id = ? ORDER BY created_at DESC");
-const getStmt = db.prepare("SELECT id, label, address, mnemonic, private_key_wif AS privateKeyWIF, created_at AS createdAt FROM accounts WHERE id = ? AND user_id = ?");
-const getPublicStmt = db.prepare("SELECT id, label, address, created_at AS createdAt FROM accounts WHERE id = ? AND user_id = ?");
-const countStmt = db.prepare("SELECT COUNT(*) AS count FROM accounts WHERE user_id = ?");
+const listStmt = db.prepare("SELECT id, label, address, network, created_at AS createdAt FROM accounts WHERE user_id = ? AND network = ? ORDER BY created_at DESC");
+const getStmt = db.prepare("SELECT id, label, address, mnemonic, private_key_wif AS privateKeyWIF, network, created_at AS createdAt FROM accounts WHERE id = ? AND user_id = ?");
+const getPublicStmt = db.prepare("SELECT id, label, address, network, created_at AS createdAt FROM accounts WHERE id = ? AND user_id = ?");
+const countStmt = db.prepare("SELECT COUNT(*) AS count FROM accounts WHERE user_id = ? AND network = ?");
 const updateLabelStmt = db.prepare("UPDATE accounts SET label = ? WHERE id = ? AND user_id = ?");
 const deleteStmt = db.prepare("DELETE FROM accounts WHERE id = ? AND user_id = ?");
 
 function createAccount(userId, label) {
+	const { network } = connections.getActiveConnection("btc");
+	const networkParams = networkParamsFor(network);
+
 	const mnemonic = bip39.generateMnemonic();
 	const seed = bip39.mnemonicToSeedSync(mnemonic);
-	const root = bip32.fromSeed(seed, REGTEST_NETWORK);
+	const root = bip32.fromSeed(seed, networkParams);
 
-	const { address } = bitcoinjs.payments.p2wpkh({ pubkey: root.publicKey, network: REGTEST_NETWORK });
+	const { address } = bitcoinjs.payments.p2wpkh({ pubkey: root.publicKey, network: networkParams });
 
 	const account = {
 		id: crypto.randomUUID(),
-		label: label || `Conta ${countStmt.get(userId).count + 1}`,
+		label: label || `Conta ${countStmt.get(userId, network).count + 1}`,
 		address,
 		mnemonic,
 		privateKeyWIF: root.toWIF(),
+		network,
 		createdAt: new Date().toISOString(),
 		userId
 	};
@@ -78,8 +97,12 @@ function createAccount(userId, label) {
 	return account;
 }
 
+// Só contas cujo `network` bate com a rede BTC ativa no momento — contas de
+// outra rede não fazem sentido misturadas na listagem (endereço/chave de
+// regtest não vale em mainnet, e vice-versa).
 function listAccounts(userId) {
-	return listStmt.all(userId);
+	const { network } = connections.getActiveConnection("btc");
+	return listStmt.all(userId, network);
 }
 
 function getAccount(id, userId) {

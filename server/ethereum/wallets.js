@@ -29,20 +29,48 @@ db.exec(`
 	)
 `);
 
+// Migração: carteiras passam a ficar presas à rede em que foram cadastradas
+// (mesmo padrão de server/bitcoin/localWallet.js pras contas de teste BTC),
+// pra não misturar carteiras de anvil/testnet/mainnet quando o admin troca a
+// conexão ativa. Isso exige trocar o UNIQUE de `address` (global) por um
+// UNIQUE composto em (address, network) — o mesmo endereço Ethereum é válido
+// em qualquer rede EVM, então cadastrar ele de novo pra uma rede diferente é
+// uma operação legítima, só não pode duplicar dentro da MESMA rede. SQLite
+// não deixa remover uma UNIQUE de coluna sem recriar a tabela.
+const ethereumWalletsColumns = db.prepare("PRAGMA table_info(ethereum_wallets)").all().map((c) => c.name);
+if (!ethereumWalletsColumns.includes("network")) {
+	db.exec(`
+		CREATE TABLE ethereum_wallets_new (
+			id TEXT PRIMARY KEY,
+			label TEXT NOT NULL,
+			address TEXT NOT NULL,
+			private_key TEXT,
+			network TEXT NOT NULL DEFAULT 'anvil',
+			created_at TEXT NOT NULL
+		);
+		INSERT INTO ethereum_wallets_new (id, label, address, private_key, network, created_at)
+			SELECT id, label, address, private_key, 'anvil', created_at FROM ethereum_wallets;
+		DROP TABLE ethereum_wallets;
+		ALTER TABLE ethereum_wallets_new RENAME TO ethereum_wallets;
+		CREATE UNIQUE INDEX idx_ethereum_wallets_address_network ON ethereum_wallets(address, network);
+	`);
+}
+
 const insertStmt = db.prepare(
-	"INSERT INTO ethereum_wallets (id, label, address, private_key, created_at) VALUES (@id, @label, @address, @privateKey, @createdAt)"
+	"INSERT INTO ethereum_wallets (id, label, address, private_key, network, created_at) VALUES (@id, @label, @address, @privateKey, @network, @createdAt)"
 );
 const listPublicStmt = db.prepare(`
-	SELECT id, label, address, created_at AS createdAt, (private_key IS NOT NULL) AS hasPrivateKey
-	FROM ethereum_wallets ORDER BY created_at ASC
+	SELECT id, label, address, network, created_at AS createdAt, (private_key IS NOT NULL) AS hasPrivateKey
+	FROM ethereum_wallets WHERE network = ? ORDER BY created_at ASC
 `);
 const getPublicStmt = db.prepare(`
-	SELECT id, label, address, created_at AS createdAt, (private_key IS NOT NULL) AS hasPrivateKey
+	SELECT id, label, address, network, created_at AS createdAt, (private_key IS NOT NULL) AS hasPrivateKey
 	FROM ethereum_wallets WHERE id = ?
 `);
-const getFullByIdStmt = db.prepare("SELECT id, label, address, private_key AS privateKey, created_at AS createdAt FROM ethereum_wallets WHERE id = ?");
-const getFullByAddressStmt = db.prepare("SELECT id, label, address, private_key AS privateKey, created_at AS createdAt FROM ethereum_wallets WHERE address = ? COLLATE NOCASE");
-const firstWalletStmt = db.prepare("SELECT id, label, address, private_key AS privateKey, created_at AS createdAt FROM ethereum_wallets ORDER BY created_at ASC LIMIT 1");
+const getFullByIdStmt = db.prepare("SELECT id, label, address, private_key AS privateKey, network, created_at AS createdAt FROM ethereum_wallets WHERE id = ? AND network = ?");
+const getFullByAddressStmt = db.prepare("SELECT id, label, address, private_key AS privateKey, network, created_at AS createdAt FROM ethereum_wallets WHERE address = ? COLLATE NOCASE AND network = ?");
+const firstWalletStmt = db.prepare("SELECT id, label, address, private_key AS privateKey, network, created_at AS createdAt FROM ethereum_wallets WHERE network = ? ORDER BY created_at ASC LIMIT 1");
+const listForSendStmt = db.prepare("SELECT id, label, address, private_key AS privateKey, network, created_at AS createdAt FROM ethereum_wallets WHERE network = ? ORDER BY created_at ASC");
 const updateLabelStmt = db.prepare("UPDATE ethereum_wallets SET label = ? WHERE id = ?");
 const deleteStmt = db.prepare("DELETE FROM ethereum_wallets WHERE id = ?");
 
@@ -51,8 +79,8 @@ function toBoolRow(row) {
 	return { ...row, hasPrivateKey: Boolean(row.hasPrivateKey) };
 }
 
-function listWallets() {
-	return listPublicStmt.all().map(toBoolRow);
+function listWallets(network) {
+	return listPublicStmt.all(network).map(toBoolRow);
 }
 
 function getWalletPublic(id) {
@@ -61,13 +89,22 @@ function getWalletPublic(id) {
 	return toBoolRow(row);
 }
 
-// Uso interno (rota de envio) — inclui a chave privada, se houver.
-function getWalletForSend(id) {
-	return getFullByIdStmt.get(id) || null;
+// Uso interno (rota de envio) — inclui a chave privada, se houver. Filtrado
+// também por `network`: uma carteira de outra rede não pode ser usada pra
+// enviar na rede ativa, mesmo que o id ainda exista no banco.
+function getWalletForSend(id, network) {
+	return getFullByIdStmt.get(id, network) || null;
 }
 
-function firstWalletForSend() {
-	return firstWalletStmt.get() || null;
+function firstWalletForSend(network) {
+	return firstWalletStmt.get(network) || null;
+}
+
+// Todas as carteiras da rede, na ordem em que foram cadastradas (com a
+// chave privada, se houver) — usado pelo fallback de envio: quando a
+// primeira carteira não tem saldo suficiente, tenta a próxima.
+function listWalletsForSend(network) {
+	return listForSendStmt.all(network);
 }
 
 function deriveAnvilPrivateKeyForAddress(address) {
@@ -85,7 +122,7 @@ function deriveAnvilPrivateKeyForAddress(address) {
 	return null;
 }
 
-function addWalletFromPrivateKey(label, privateKey) {
+function addWalletFromPrivateKey(label, privateKey, network) {
 	let wallet;
 	try {
 		wallet = new ethers.Wallet(privateKey.trim());
@@ -93,8 +130,8 @@ function addWalletFromPrivateKey(label, privateKey) {
 		throw new Error("Chave privada inválida.");
 	}
 
-	if (getFullByAddressStmt.get(wallet.address)) {
-		throw new Error("Já existe uma carteira cadastrada com esse endereço.");
+	if (getFullByAddressStmt.get(wallet.address, network)) {
+		throw new Error("Já existe uma carteira cadastrada com esse endereço nessa rede.");
 	}
 
 	const row = {
@@ -102,6 +139,7 @@ function addWalletFromPrivateKey(label, privateKey) {
 		label: label || wallet.address,
 		address: wallet.address,
 		privateKey: wallet.privateKey,
+		network,
 		createdAt: new Date().toISOString()
 	};
 
@@ -109,12 +147,12 @@ function addWalletFromPrivateKey(label, privateKey) {
 	return getWalletPublic(row.id);
 }
 
-async function importFromAnvil() {
+async function importFromAnvil(network) {
 	const accounts = await anvilRpc.ethAccounts();
 	const imported = [];
 
 	for (const address of accounts) {
-		if (getFullByAddressStmt.get(address)) {
+		if (getFullByAddressStmt.get(address, network)) {
 			continue;
 		}
 
@@ -124,6 +162,7 @@ async function importFromAnvil() {
 			label: `Anvil ${address.slice(0, 6)}…${address.slice(-4)}`,
 			address,
 			privateKey,
+			network,
 			createdAt: new Date().toISOString()
 		};
 
@@ -155,6 +194,7 @@ module.exports = {
 	getWalletPublic,
 	getWalletForSend,
 	firstWalletForSend,
+	listWalletsForSend,
 	addWalletFromPrivateKey,
 	importFromAnvil,
 	renameWallet,

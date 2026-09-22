@@ -14,6 +14,12 @@ const statusVariant: Record<EthSendStatus, "success" | "outline" | "destructive"
   failed: "destructive",
 }
 
+const statusLabel: Record<EthSendStatus, string> = {
+  confirmed: "confirmado",
+  pending: "pendente",
+  failed: "falhou",
+}
+
 interface HistoryTableProps {
   limit?: number
   title?: string
@@ -52,7 +58,7 @@ export function HistoryTable({ limit, title = "Últimos envios (ETH)" }: History
                   <TableCell className="max-w-32 truncate font-mono text-xs" title={item.fromAddress}>{item.fromAddress}</TableCell>
                   <TableCell className="max-w-32 truncate font-mono text-xs" title={item.toAddress}>{item.toAddress}</TableCell>
                   <TableCell className="whitespace-nowrap">{formatEth(item.amountEth)} ETH</TableCell>
-                  <TableCell><Badge variant={statusVariant[item.status]}>{item.status}</Badge></TableCell>
+                  <TableCell><Badge variant={statusVariant[item.status]}>{statusLabel[item.status]}</Badge></TableCell>
                   <TableCell className="max-w-32 truncate font-mono text-xs">
                     <a
                       href={`${ETH_EXPLORER_BASE_URL}/tx/${item.hash}`}

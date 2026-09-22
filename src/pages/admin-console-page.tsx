@@ -1,6 +1,9 @@
 import { useState } from "react"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
-import { ExternalLink, LogOut } from "lucide-react"
+import { ExternalLink, LogOut, Users } from "lucide-react"
+
+import btcIcon from "@/assets/coins/btc.svg"
+import ethIcon from "@/assets/coins/eth.svg"
 
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Button, buttonVariantClasses } from "@/components/ui/button"
@@ -9,10 +12,12 @@ import { cn } from "@/lib/utils"
 import { LocalAccountList } from "@/components/btc/local-account-list"
 import { SendForm as BtcSendForm } from "@/components/btc/send-form"
 import { HistoryTable as BtcHistoryTable } from "@/components/btc/history-table"
+import { ConnectionManager as BtcConnectionManager } from "@/components/btc/connection-manager"
 import { WalletList as EthWalletList } from "@/components/eth/wallet-list"
 import { SendForm as EthSendForm } from "@/components/eth/send-form"
 import { HistoryTable as EthHistoryTable } from "@/components/eth/history-table"
-import { FaucetCard as EthFaucetCard } from "@/components/eth/faucet-card"
+import { ConnectionManager as EthConnectionManager } from "@/components/eth/connection-manager"
+import { UsersManager } from "@/components/admin/users-manager"
 import { getInitialTheme } from "@/lib/theme"
 import { EXPLORER_BASE_URL, ETH_EXPLORER_BASE_URL } from "@/lib/config"
 import { logout } from "@/services/api"
@@ -22,10 +27,10 @@ interface AdminConsolePageProps {
   user: AuthUser
 }
 
-type Network = "btc" | "eth"
+type Tab = "btc" | "eth" | "users"
 
 export function AdminConsolePage({ user }: AdminConsolePageProps) {
-  const [network, setNetwork] = useState<Network>("btc")
+  const [tab, setTab] = useState<Tab>("btc")
   const [btcDestination, setBtcDestination] = useState("")
   const queryClient = useQueryClient()
 
@@ -34,10 +39,10 @@ export function AdminConsolePage({ user }: AdminConsolePageProps) {
     onSuccess: () => queryClient.setQueryData(["me"], null),
   })
 
-  const explorerUrl = network === "btc" ? EXPLORER_BASE_URL : ETH_EXPLORER_BASE_URL
+  const explorerUrl = tab === "eth" ? ETH_EXPLORER_BASE_URL : EXPLORER_BASE_URL
 
   return (
-    <div className="mx-auto flex max-w-5xl flex-col gap-8 p-6 md:p-10">
+    <div className="mx-auto flex max-w-7xl flex-col gap-8 p-6 md:p-10">
       <div className="flex items-start justify-between">
         <div className="flex flex-col gap-1">
           <h1 className="font-heading text-2xl font-semibold">Wallet Hub — Console admin</h1>
@@ -64,11 +69,18 @@ export function AdminConsolePage({ user }: AdminConsolePageProps) {
       </div>
 
       <div className="flex gap-2">
-        <Button variant={network === "btc" ? "default" : "outline"} onClick={() => setNetwork("btc")}>Bitcoin</Button>
-        <Button variant={network === "eth" ? "default" : "outline"} onClick={() => setNetwork("eth")}>Ethereum</Button>
+        <Button variant={tab === "btc" ? "default" : "outline"} onClick={() => setTab("btc")}>
+          <img src={btcIcon} alt="" className="size-4" /> Bitcoin
+        </Button>
+        <Button variant={tab === "eth" ? "default" : "outline"} onClick={() => setTab("eth")}>
+          <img src={ethIcon} alt="" className="size-4" /> Ethereum
+        </Button>
+        <Button variant={tab === "users" ? "default" : "outline"} onClick={() => setTab("users")}><Users /> Usuários</Button>
       </div>
 
-      {network === "btc" ? (
+      {tab === "users" && <UsersManager />}
+
+      {tab === "btc" && (
         <>
           <Alert>
             <AlertDescription className="flex flex-col gap-1.5">
@@ -84,8 +96,12 @@ export function AdminConsolePage({ user }: AdminConsolePageProps) {
           </div>
 
           <BtcHistoryTable />
+
+          <BtcConnectionManager />
         </>
-      ) : (
+      )}
+
+      {tab === "eth" && (
         <>
           <Alert>
             <AlertDescription className="flex flex-col gap-1.5">
@@ -100,11 +116,9 @@ export function AdminConsolePage({ user }: AdminConsolePageProps) {
             <EthWalletList />
           </div>
 
-          <div className="grid gap-6 md:grid-cols-2">
-            <EthFaucetCard />
-          </div>
-
           <EthHistoryTable />
+
+          <EthConnectionManager />
         </>
       )}
     </div>

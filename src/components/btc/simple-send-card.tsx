@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { z } from "zod"
-import { Bitcoin, Send as SendIcon } from "lucide-react"
+import { Send as SendIcon } from "lucide-react"
 
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -12,6 +12,7 @@ import { Alert, AlertDescription } from "@/components/ui/alert"
 import { getBtcHistory, sendBtc } from "@/services/api"
 import { getErrorMessage } from "@/lib/api-errors"
 import { formatBtc } from "@/lib/utils"
+import btcIcon from "@/assets/coins/btc.svg"
 
 const DAILY_LIMIT_BTC = 3
 
@@ -64,7 +65,7 @@ export function SimpleSendCard() {
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="flex items-center gap-2"><Bitcoin className="size-4" /> Enviar BTC</CardTitle>
+        <CardTitle className="flex items-center gap-2"><img src={btcIcon} alt="" className="size-4" /> Enviar BTC</CardTitle>
         <CardDescription>Regtest — limite de {DAILY_LIMIT_BTC} BTC por dia, por endereço de destino.</CardDescription>
       </CardHeader>
       <CardContent>

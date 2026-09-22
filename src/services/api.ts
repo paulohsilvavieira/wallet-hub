@@ -9,6 +9,14 @@ import type {
   AuthUser,
 } from "@/types/wallet"
 import type { EthWallet, EthSendResult, FaucetResult } from "@/types/ethereum"
+import type {
+  BtcConnection,
+  EthConnection,
+  BtcConnectionConfig,
+  EthConnectionConfig,
+  BtcNetwork,
+  EthNetwork,
+} from "@/types/connection"
 import { queryClient } from "@/lib/query-client"
 
 const api = axios.create({ baseURL: "/api" })
@@ -42,6 +50,18 @@ export async function login(email: string, password: string): Promise<AuthUser> 
 
 export async function logout(): Promise<void> {
   await api.post("/auth/logout")
+}
+
+// --- Usuários (admin-only) ---
+
+export async function getUsers(): Promise<AuthUser[]> {
+  const { data } = await api.get<AuthUser[]>("/admin/users")
+  return data
+}
+
+export async function resetUserPassword(id: string): Promise<{ user: AuthUser; tempPassword: string }> {
+  const { data } = await api.post<{ user: AuthUser; tempPassword: string }>(`/admin/users/${id}/reset-password`)
+  return data
 }
 
 // --- Bitcoin ---
@@ -99,6 +119,39 @@ export async function getBtcAccountBalance(id: string): Promise<AccountBalance> 
   return data
 }
 
+// --- Bitcoin: conexões de node (admin-only) ---
+
+export async function getBtcConnections(): Promise<BtcConnection[]> {
+  const { data } = await api.get<BtcConnection[]>("/btc/connections")
+  return data
+}
+
+export async function createBtcConnection(params: {
+  network: BtcNetwork
+  label: string
+  config: BtcConnectionConfig
+}): Promise<BtcConnection> {
+  const { data } = await api.post<BtcConnection>("/btc/connections", params)
+  return data
+}
+
+export async function updateBtcConnection(
+  id: string,
+  params: { network: BtcNetwork; label: string; config: BtcConnectionConfig },
+): Promise<BtcConnection> {
+  const { data } = await api.put<BtcConnection>(`/btc/connections/${id}`, params)
+  return data
+}
+
+export async function activateBtcConnection(id: string): Promise<BtcConnection> {
+  const { data } = await api.post<BtcConnection>(`/btc/connections/${id}/activate`)
+  return data
+}
+
+export async function deleteBtcConnection(id: string): Promise<void> {
+  await api.delete(`/btc/connections/${id}`)
+}
+
 // --- Ethereum ---
 
 export async function getEthWallets(): Promise<EthWallet[]> {
@@ -142,4 +195,37 @@ export async function sendEth(params: {
 export async function getEthHistory(): Promise<EthSendResult[]> {
   const { data } = await api.get<EthSendResult[]>("/eth/history")
   return data
+}
+
+// --- Ethereum: conexões de node (admin-only) ---
+
+export async function getEthConnections(): Promise<EthConnection[]> {
+  const { data } = await api.get<EthConnection[]>("/eth/connections")
+  return data
+}
+
+export async function createEthConnection(params: {
+  network: EthNetwork
+  label: string
+  config: EthConnectionConfig
+}): Promise<EthConnection> {
+  const { data } = await api.post<EthConnection>("/eth/connections", params)
+  return data
+}
+
+export async function updateEthConnection(
+  id: string,
+  params: { network: EthNetwork; label: string; config: EthConnectionConfig },
+): Promise<EthConnection> {
+  const { data } = await api.put<EthConnection>(`/eth/connections/${id}`, params)
+  return data
+}
+
+export async function activateEthConnection(id: string): Promise<EthConnection> {
+  const { data } = await api.post<EthConnection>(`/eth/connections/${id}/activate`)
+  return data
+}
+
+export async function deleteEthConnection(id: string): Promise<void> {
+  await api.delete(`/eth/connections/${id}`)
 }

@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { z } from "zod"
-import { Coins, Send as SendIcon } from "lucide-react"
+import { Send as SendIcon } from "lucide-react"
 
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -12,6 +12,7 @@ import { Alert, AlertDescription } from "@/components/ui/alert"
 import { getEthHistory, sendEth } from "@/services/api"
 import { getErrorMessage } from "@/lib/api-errors"
 import { formatEth } from "@/lib/utils"
+import ethIcon from "@/assets/coins/eth.svg"
 
 const DAILY_LIMIT_ETH = 3
 
@@ -63,7 +64,7 @@ export function SimpleSendCard() {
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="flex items-center gap-2"><Coins className="size-4" /> Enviar ETH</CardTitle>
+        <CardTitle className="flex items-center gap-2"><img src={ethIcon} alt="" className="size-4" /> Enviar ETH</CardTitle>
         <CardDescription>Anvil — limite de {DAILY_LIMIT_ETH} ETH por dia, por endereço de destino.</CardDescription>
       </CardHeader>
       <CardContent>

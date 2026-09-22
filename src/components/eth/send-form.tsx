@@ -1,15 +1,15 @@
 import { useEffect, useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { z } from "zod"
-import { Send as SendIcon } from "lucide-react"
+import { Droplets, Send as SendIcon } from "lucide-react"
 
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { Badge } from "@/components/ui/badge"
 import { Alert, AlertDescription } from "@/components/ui/alert"
-import { getEthWallets, sendEth } from "@/services/api"
+import { WalletSelect } from "@/components/eth/wallet-select"
+import { getEthWallets, sendEth, ethFaucet } from "@/services/api"
 import { getErrorMessage } from "@/lib/api-errors"
 import { formatEth } from "@/lib/utils"
 
@@ -28,6 +28,8 @@ export function SendForm({ presetAddress }: SendFormProps) {
   const [address, setAddress] = useState("")
   const [amountEth, setAmountEth] = useState("")
   const [formError, setFormError] = useState<string | null>(null)
+  const [faucetAddress, setFaucetAddress] = useState("")
+  const [faucetAmount, setFaucetAmount] = useState("10")
   const queryClient = useQueryClient()
 
   useEffect(() => {
@@ -36,7 +38,6 @@ export function SendForm({ presetAddress }: SendFormProps) {
 
   const walletsQuery = useQuery({ queryKey: ["eth-wallets"], queryFn: getEthWallets, refetchInterval: 15000 })
   const wallets = walletsQuery.data ?? []
-  const selectedWallet = wallets.find((w) => w.id === walletId)
 
   useEffect(() => {
     if (!walletId && wallets.length > 0) {
@@ -50,6 +51,13 @@ export function SendForm({ presetAddress }: SendFormProps) {
       setAmountEth("")
       queryClient.invalidateQueries({ queryKey: ["eth-wallets"] })
       queryClient.invalidateQueries({ queryKey: ["eth-history"] })
+    },
+  })
+
+  const faucetMutation = useMutation({
+    mutationFn: () => ethFaucet(faucetAddress.trim(), Number(faucetAmount)),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["eth-wallets"] })
     },
   })
 
@@ -80,20 +88,7 @@ export function SendForm({ presetAddress }: SendFormProps) {
         <form className="flex flex-col gap-4" onSubmit={handleSubmit}>
           <div className="flex flex-col gap-2">
             <Label htmlFor="eth-from">Carteira de origem</Label>
-            <select
-              id="eth-from"
-              className="h-[38px] w-full rounded-lg border border-input bg-transparent px-3 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
-              value={walletId}
-              onChange={(e) => setWalletId(e.target.value)}
-            >
-              <option value="" disabled>Selecione...</option>
-              {wallets.map((w) => (
-                <option key={w.id} value={w.id}>{w.label} — {w.address.slice(0, 10)}…</option>
-              ))}
-            </select>
-            {selectedWallet?.balanceEth !== undefined && selectedWallet?.balanceEth !== null && (
-              <Badge variant="success" className="w-fit">{formatEth(Number(selectedWallet.balanceEth))} ETH</Badge>
-            )}
+            <WalletSelect wallets={wallets} value={walletId} onChange={setWalletId} />
           </div>
 
           <div className="flex flex-col gap-2">
@@ -130,6 +125,60 @@ export function SendForm({ presetAddress }: SendFormProps) {
             </Alert>
           )}
         </form>
+
+        <div className="mt-4 border-t border-border pt-4">
+          <div className="flex items-center gap-2 text-sm text-muted-foreground">
+            <Droplets className="size-4" /> Faucet — creditar saldo direto num endereço
+          </div>
+
+          <form
+            className="mt-3 flex flex-col gap-4"
+            onSubmit={(e) => {
+              e.preventDefault()
+              faucetMutation.mutate()
+            }}
+          >
+            <div className="flex flex-col gap-2">
+              <Label htmlFor="faucet-address">Endereço</Label>
+              <Input
+                id="faucet-address"
+                placeholder="0x..."
+                value={faucetAddress}
+                onChange={(e) => setFaucetAddress(e.target.value)}
+              />
+            </div>
+
+            <div className="flex flex-col gap-2">
+              <Label htmlFor="faucet-amount">Valor (ETH)</Label>
+              <Input
+                id="faucet-amount"
+                type="number"
+                step="0.01"
+                min="0"
+                value={faucetAmount}
+                onChange={(e) => setFaucetAmount(e.target.value)}
+              />
+            </div>
+
+            <Button type="submit" variant="outline" disabled={faucetMutation.isPending || !faucetAddress.trim()}>
+              <Droplets /> Creditar
+            </Button>
+
+            {faucetMutation.isError && (
+              <Alert variant="destructive">
+                <AlertDescription>{getErrorMessage(faucetMutation.error)}</AlertDescription>
+              </Alert>
+            )}
+
+            {faucetMutation.isSuccess && (
+              <Alert>
+                <AlertDescription>
+                  Novo saldo de {faucetMutation.data.address}: {formatEth(Number(faucetMutation.data.newBalanceEth))} ETH
+                </AlertDescription>
+              </Alert>
+            )}
+          </form>
+        </div>
       </CardContent>
     </Card>
   )

@@ -82,7 +82,7 @@ export function LocalAccountList({ onReceive }: LocalAccountListProps) {
           <div className="text-sm text-muted-foreground">Nenhuma conta ainda — crie uma acima.</div>
         )}
 
-        <div className="flex flex-col">
+        <div className="scroll-thin flex max-h-96 flex-col overflow-y-auto pr-4">
           {accountsQuery.data?.map((account) => (
             <AccountCard key={account.id} account={account} onReceive={onReceive} />
           ))}
