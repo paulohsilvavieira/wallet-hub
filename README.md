@@ -1,10 +1,8 @@
 # Wallet Hub
 
 Ferramenta pra facilitar a transferência de saldo de teste (**Bitcoin
-regtest** e **Ethereum/Anvil**) durante o desenvolvimento e teste do
-**MyBitcoin** — sem precisar decorar comandos de RPC ou ficar chamando
-`bitcoin-cli`/`cast` na mão toda vez que precisa de fundos numa carteira de
-teste.
+regtest** e **Ethereum/Anvil**) para facilitar testes na plataforma
+**MyBitcoin**
 
 Um só login, dois níveis de acesso:
 
