@@ -64,10 +64,10 @@ Você precisa de dois serviços já rodando e alcançáveis pela rede:
    `ANVIL_RPC_TOKEN` se o seu proxy/RPC exigir).
 
 Se você não tem esses dois de pé ainda, existem repositórios prontos que já
-sobem um `bitcoind` regtest com auto-mining e um Anvil, cada um acompanhado
-de um block explorer (btc-rpc-explorer e Blockscout, respectivamente) — pra
-não precisar montar isso do zero. Procure pelos projetos de infraestrutura
-regtest/devnet do MyBitcoin se for o seu caso.
+sobem isso, cada um acompanhado de um block explorer:
+
+- [`bitcoin-local-explorer`](https://github.com/paulohsilvavieira/bitcoin-local-explorer) — `bitcoind` regtest com auto-mining + btc-rpc-explorer.
+- [`ethereum-local-explorer`](https://github.com/paulohsilvavieira/ethereum-local-explorer) — Anvil + Blockscout.
 
 ## Configuração
 
